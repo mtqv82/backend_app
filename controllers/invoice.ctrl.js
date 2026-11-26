@@ -65,3 +65,23 @@ exports.getInvoices = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+exports.getInvoiceDetailById = async (req, res) => {
+  const sql = `
+    SELECT i.*, d.*, p.category 
+    FROM invoices i
+    LEFT JOIN invoice_details d ON i.id = d.invoice_id
+    LEFT JOIN products p ON d.product_sku = p.sku
+    WHERE i.id = ? 
+  `;
+  const [rows] = await db.query(sql, [req.params.id]);
+  res.json(rows);
+};
+
+exports.getCustomerHistory = async (req, res) => {
+  const [rows] = await db.query(
+    `SELECT id, final_total, debt_amount, created_at 
+     FROM invoices WHERE customer_phone = ? ORDER BY created_at DESC`, 
+    [req.query.phone]
+  );
+  res.json(rows);
+};
