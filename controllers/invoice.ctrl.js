@@ -150,38 +150,75 @@ exports.returnInvoiceItems = async (req, res) => {
   try {
     await conn.beginTransaction();
     const { invoiceId, itemsToReturn } = req.body;
-    // itemsToReturn là mảng chứa các món khách chọn trả: [{ sku, qty, price, serials }]
+
+    if (!itemsToReturn || itemsToReturn.length === 0) {
+      throw new Error("Không có sản phẩm nào để trả.");
+    }
 
     let totalRefund = 0;
+    const today = new Date().toLocaleDateString('vi-VN');
 
     for (let item of itemsToReturn) {
-      // 1. Cộng trả lại tồn kho
+      if (item.qty <= 0) throw new Error("Số lượng trả phải lớn hơn 0!");
+
+      const [invDetails] = await conn.query(
+        "SELECT qty, price FROM invoice_details WHERE invoice_id = ? AND product_sku = ?",
+        [invoiceId, item.sku]
+      );
+
+      if (invDetails.length === 0) {
+        throw new Error(`Sản phẩm ${item.sku} không tồn tại trong hóa đơn này!`);
+      }
+
+      const boughtQty = invDetails[0].qty;
+      const originalPrice = invDetails[0].price;
+
+      if (item.qty > boughtQty) {
+        throw new Error(`Số lượng trả (${item.qty}) lớn hơn số lượng đã mua (${boughtQty})!`);
+      }
+
       await conn.query(
         "UPDATE products SET stock = stock + ? WHERE sku = ?",
         [item.qty, item.sku]
       );
 
-      // 2. Chuyển trạng thái các mã Serial (nếu có) từ SOLD về lại IN_STOCK
       if (item.serials && item.serials.length > 0) {
-        for (let sn of item.serials) {
-          await conn.query(
-            "UPDATE product_serials SET status = 'IN_STOCK' WHERE serial_number = ? AND product_sku = ?",
-            [sn, item.sku]
-          );
-        }
+        await conn.query(
+          "UPDATE product_serials SET status = 'IN_STOCK', invoice_id = NULL WHERE serial_number IN (?) AND product_sku = ?",
+          [item.serials, item.sku]
+        );
       }
 
-      // 3. Tính tổng tiền cần trừ ra khỏi hóa đơn
-      totalRefund += item.price * item.qty;
+      const remainingQty = boughtQty - item.qty;
+      let queryUpdateName = "";
+
+      if (remainingQty === 0) {
+        queryUpdateName = `CONCAT('<strike>', product_name, '</strike> <br><span style="color: #e74c3c; font-size: 12px; font-style: italic;">(Đã trả ngày ${today})</span>')`;
+      } else {
+        queryUpdateName = `CONCAT(product_name, ' <br><span style="color: #e74c3c; font-size: 12px; font-style: italic;">(Đã trả ${item.qty} cái ngày ${today})</span>')`;
+      }
+
+      await conn.query(
+        `UPDATE invoice_details 
+         SET qty = ?, 
+             product_name = ${queryUpdateName} 
+         WHERE invoice_id = ? AND product_sku = ?`,
+        [remainingQty, invoiceId, item.sku]
+      );
+
+      totalRefund += originalPrice * item.qty;
     }
 
-    // 4. Cập nhật lại tổng tiền Hóa đơn và tự động thêm Ghi chú
+    const returnedItemNames = itemsToReturn
+      .map(item => `${item.name} (x${item.qty})`)
+      .join(', ');
+
     await conn.query(`
       UPDATE invoices
       SET final_total = final_total - ?,
-      note = CONCAT(IFNULL(note, ''), ' | Đã nhận trả ', ? , ' món hàng.')
-  WHERE id = ?
-    `, [totalRefund, itemsToReturn.length, invoiceId]);
+          note = CONCAT(IFNULL(note, ''), ' | Đã nhận trả: ', ?)
+      WHERE id = ?
+    `, [totalRefund, returnedItemNames, invoiceId]);
 
     await conn.commit();
     res.json({
@@ -190,7 +227,7 @@ exports.returnInvoiceItems = async (req, res) => {
     });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, success: false });
   } finally {
     conn.release();
   }

@@ -15,7 +15,14 @@ const settingsRoutes = require("./routes/settings.routes");
 const app = express();
 app.use(cors());
 app.use(express.json());
-
+// app.use((req, res, next) => {
+//   console.log("\n=== CÓ REQUEST TỪ FRONTEND GỬI LÊN ===");
+//   console.log("👉 1. API:", req.method, req.url);
+//   console.log("👉 2. Content-Type (Định dạng FE gửi):", req.headers['content-type']);
+//   console.log("👉 3. Dữ liệu trong Body:", req.body);
+//   console.log("======================================\n");
+//   next(); // Bắt buộc có next() để nó chạy tiếp vào Controller của bạn
+// });
 // ======================== API HỆ THỐNG ========================
 app.get("/api/status", async (req, res) => {
   try {
